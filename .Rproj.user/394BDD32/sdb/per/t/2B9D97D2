@@ -1,0 +1,17 @@
+{
+    "contents" : "require(plyr)\n\nif (!file.exists(\"StormData.bz2\"))\n  download.file(\"https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2\", \"StormData.bz2\")\n\nstormData <- read.csv(bzfile(\"StormData.bz2\"))\n\ndamageByEventType <- ddply(stormData, \n                           .(eventType=toupper(gsub(\"/\", \" \", gsub(\"\\\\b([a-z])([a-z]+)\", \"\\\\U\\\\1\\\\L\\\\2\", tolower(EVTYPE), perl=TRUE)))), \n                           summarise, \n                           meanFatalities=mean(FATALITIES), sumFatalities=sum(FATALITIES), \n                           meanInjuries=mean(INJURIES), sumInjuries=sum(INJURIES), \n                           meanPropertyDamage=mean(PROPDMG), sumPropertyDamage=sum(PROPDMG), \n                           meanCropDamage=mean(CROPDMG), sumCropDamage=sum(CROPDMG))\n",
+    "created" : 1405724079241.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "955578664",
+    "id" : "2B9D97D2",
+    "lastKnownWriteTime" : 1405730009,
+    "path" : "~/GitHub/ReproducibleResearchPart2/LoadAndPrepareData.R",
+    "project_path" : "LoadAndPrepareData.R",
+    "properties" : {
+        "tempName" : "Untitled1"
+    },
+    "source_on_save" : true,
+    "type" : "r_source"
+}
