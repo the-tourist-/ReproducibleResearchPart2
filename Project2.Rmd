@@ -1,0 +1,260 @@
+---
+title: "Reproducible Research Assignment 2"
+author: "Graeme Smith"
+date: "Thursday, July 24, 2014"
+output: html_document
+---
+
+# Population and Economic Damage from Severe Weather Events in the United States
+
+## Synopsis
+
+## Data Processing
+
+Data was loaded from the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database.
+
+``` {r cache=FALSE}
+if (!file.exists("StormData.bz2"))
+  download.file("https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2", 
+                "StormData.bz2")
+
+stormDataRaw <- read.csv(bzfile("StormData.bz2"))
+```
+
+The most significant columns of this data set were :
+
+- EVTYPE - The Event Type
+- FATALITIES - The total number of fatalities
+- INJURIES - The total number of injuries
+- PROPDMG, PROPDMGEXP - The estimated property damage, and an exponent indicator, H for hundreds, K for thousands and M for millions, B for billions
+- CROPDMG, CROPDMGEXP - The estimated crop and agricultural damage, and an exponent indicator, H for hundreds, K for thousands and M for millions, B for billions
+
+This data set was restricted to only the rows that contained positive values in one of the FATALITIES, PROPDMG, INJURIES or CROPDMG columns.  The column set was also reduced to only the columns deamed useful for the analysis.
+
+``` {r cache=FALSE}
+stormData <- stormDataRaw[stormDataRaw$FATALITIES > 0 | stormDataRaw$INJURIES > 0 | 
+                          stormDataRaw$PROPDMG > 0 | stormDataRaw$CROPDMG  > 0, 
+                          c("BGN_DATE", "END_DATE", "COUNTY", "STATE", "EVTYPE", "FATALITIES", 
+                            "INJURIES", "PROPDMG", "CROPDMG", "PROPDMGEXP", "CROPDMGEXP")]
+```
+
+PROPDMG and CROPDMG were multiplied by their exponents (H->100, K->1000, m->1000000 and B->1,000,000,000).  Numbers were treated as exponents of 10, eg 3 was considered to be a multiplier of 10^3. Lowercase letters where treated the same as uppercase letters. Blanks and all other characters where treated as multipliers of 1.  The modified results where placed in new columns **PropDamage** and **CropDamage**.
+
+``` {r cache=FALSE}
+stormData$PropDamage <- stormData$PROPDMG
+stormData$CropDamage <- stormData$CROPDMG
+
+expMultipliers <- data.frame(expCode=c("H", "K", "M", "B"), multiplier=c(100, 1000, 1000000, 1000000000))
+for (exp in 1:9) 
+  expMultipliers <- rbind(expMultipliers, data.frame(expCode=as.character(exp), multiplier=10^exp))
+
+for (i in 1:length(expMultipliers$expCode)) {
+  filterRows <- which(toupper(stormData$PROPDMGEXP) == expMultipliers$expCode[i])
+  stormData$PropDamage[filterRows] <- stormData$PropDamage[filterRows] * expMultipliers$multiplier[i]
+  filterRows <- which(toupper(stormData$CROPDMGEXP) == expMultipliers$expCode[i])
+  stormData$CropDamage[filterRows] <- stormData$CropDamage[filterRows] * expMultipliers$multiplier[i]
+}
+```
+
+The [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) contains 48 main Event Types.  However, due to inconsistant naming, misspelling and some event having multiple characterisations, there were 985 different EVTYPE values and 488 in the filtered data set.  This was reduced to 388 unique values through the following manipulations
+
+- All text converted to uppercase
+- Punctuation replaced with spaces
+- Leading and trailing spaces removed
+- Double spaces removed
+- The abbreviation TSTM was changed to THUNDERSTORM
+- TORNADO F was changed to TORNADO
+
+The result of this operation was stored in a new column **EventType**.  No further manipulations were done as the top 48 Event Types covered over 99% of the data.  The others were treated as outliers, which should not affect the calculations due to their small numbers.
+
+``` {r cache=FALSE}
+stormData$EventType <- toupper(as.character(stormData$EVTYPE))
+stormData$EventType <- gsub("[[:punct:]]", " ", stormData$EventType)
+stormData$EventType <- gsub("[[:digit:]]", "", stormData$EventType)
+stormData$EventType <- gsub("^ *|(?<= ) | *$", perl=T, "",stormData$EventType)
+stormData$EventType <- gsub("TSTM", "THUNDERSTORM", stormData$EventType, fixed=T)
+stormData$EventType <- gsub("TORNADO F", "TORNADO", stormData$EventType, fixed=T)
+
+print(max(head(cumsum(sort(table(stormData$EventType), decreasing=T)) / length(stormData$EVTYPE), n = 48)))
+```
+
+## Analysis
+
+The first step of the analysis was to look at the distributions of the Fatalities, Injuries, Property Damages and Crop Damages.  As can been seen from the graph below, the Fatilities and Injuries are highly left skewed, with most of the results being 0 or 1.  The Property and Crop Damages seem to have roughly log normal distribution, meaning that **mean**, and by implication **sum** values may be easily distorted by large outliers.  
+
+``` {r fig.width=12, fig.height=8, cache=FALSE}
+par(mfrow=c(2,2))
+columnNames <- c("FATALITIES", "INJURIES", "PropDamage", "CropDamage")
+friendlyNames <- c("Fatalities", "Injuries", "Property Damage", "Crop Damage")
+
+for (i in 1:4) {
+  columnName <- columnNames[i]
+  actualValues <- stormData[stormData[,columnName]>0,columnName]
+  
+  if (i <= 2)
+    values <- log2(actualValues)
+  else
+    values <- log10(actualValues)
+  range <- floor(range(values))
+  
+  hist(values, main=paste(friendlyNames[i], "(> 0)"), xlab=NA, xaxt="n", col="blue")
+  
+  if (i <= 2)
+    axis(1, axTicks(1), sprintf("%i", 2^axTicks(1)))
+  else
+    axis(1, axTicks(1), parse(text=sprintf("10^%i", axTicks(1))))
+  
+  mean = mean(actualValues)
+  median = median(actualValues)
+  
+  if (i <= 2) {
+    abline(v=log2(mean), col="red")
+    abline(v=log2(median), col="green")
+    
+    legend("topright", legend=c("Frequency", sprintf("mean = %#.1f", mean), 
+                                sprintf("median = %i", as.integer(median))), 
+           fill=c("blue", NA, NA), col=c(NA, "red", "green"), pch=c(NA, "-", "-"), 
+           border=c("black", NA, NA))
+  }
+  else {
+    abline(v=log10(mean), col="red")
+    abline(v=log10(median), col="green")
+    
+    legend("topright", legend=c("Frequency", sprintf("mean = %s", prettyNum(mean, big.mark=",")), 
+                                sprintf("median = %s", prettyNum(median, big.mark=","))), 
+           fill=c("blue", NA, NA), col=c(NA, "red", "green"), pch=c(NA, "-", "-"), 
+           border=c("black", NA, NA))
+  }
+}
+```
+
+Some of this distortion is caused by the log normal nature of the property and crop damages.  But some may also be caused by mis-entries. For example the first row in the following table seems to be disproportionately high value for the property damage from the 2006 Californian floods.
+
+``` {r cache=FALSE}
+require(knitr)
+
+kable(head(stormData[order(stormData$PropDamage + stormData$CropDamage, decreasing=T), c("BGN_DATE", "STATE", "EVTYPE", "PROPDMG", "PROPDMGEXP", "CROPDMG", "CROPDMGEXP", "PropDamage", "CropDamage")], n=10))
+```
+
+# Results
+
+``` {r fig.width=12, fig.height=12, cache=FALSE}
+require(plyr)
+
+par(mfrow=c(2,2), mar=c(3.1,7.1,3.1,1.1))
+
+damageByEventType <- ddply(stormData[stormData$INJURIES > 0 | stormData$FATALITIES > 0,], 
+                           .(EventType), 
+                           summarise, 
+                           sumInjuriesAndFatalities=sum(INJURIES+FATALITIES), 
+                           sumInjuries=sum(INJURIES),
+                           sumFatalities=sum(FATALITIES), 
+                           noOfEvents=length(EventType))
+
+filter <- tail(damageByEventType$EventType[order(damageByEventType$sumInjuriesAndFatalities)][damageByEventType$noOfEvents>=10], n=20)
+with(damageByEventType, 
+     sorting <<- EventType[EventType %in% filter]
+     [order(damageByEventType[EventType %in% filter,]$sumInjuriesAndFatalities)]
+)
+damageByEventType <- damageByEventType[damageByEventType$EventType %in% filter,]
+damageByEventType <- damageByEventType[match(sorting, damageByEventType$EventType),]
+
+barplot(damageByEventType$sumInjuriesAndFatalities, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("green", "green3"), beside=TRUE, xlab=NA, ylab=NA,
+        main="Total Injuries and Fatalities", 
+        cex.names=1.0, las=1)
+
+barplot(damageByEventType$noOfEvents, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("blue", "blue4"), beside=TRUE, xlab=NA, ylab=NA,
+        main="No of Events with Injuries or Fatalities", 
+        cex.names=1.0, las=1)
+
+barplot(damageByEventType$sumInjuries, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("purple", "purple3"), beside=TRUE, xlab=NA, ylab=NA,
+        main="Total Injuries", 
+        cex.names=1.0, las=1)
+
+barplot(damageByEventType$sumFatalities, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("red", "red3"), beside=TRUE, xlab=NA, ylab=NA,
+        main="Total Fatalities", 
+        cex.names=1.0, las=1)
+```
+
+Because of the distribution of the Property and Crop Damage values, in order to get a more realistic measure of the risk and likelyhood of damages, the median value of the estimated damages for each even multiplied by the total number of occurances of the events was used.  
+
+``` {r fig.width=12, fig.height=15, cache=FALSE, dpi=288}
+par(mfrow=c(3,2), mar=c(2.1,7.6,3.1,1.1))
+
+damageByEventType <- ddply(stormData[stormData$CropDamage > 0 | stormData$PropDamage > 0,], 
+                           .(EventType), 
+                           summarise, 
+                           meanCropAndPropertyDamage=mean(CropDamage+PropDamage),
+                           medianCropAndPropertyDamage=median(CropDamage+PropDamage), 
+                           sumCropAndPropertyDamage=sum(CropDamage+PropDamage), 
+                           meanCropDamage=mean(CropDamage),
+                           medianCropDamage=median(CropDamage[CropDamage>0]), 
+                           sumCropDamage=sum(CropDamage), 
+                           noOfEvents=length(EventType),
+                           noOfEventsOverHundredMillion=sum(CropDamage+PropDamage>1e8),
+                           noOfCropEvents=sum(CropDamage>0),
+                           meanPropDamage=mean(PropDamage),
+                           medianPropDamage=median(PropDamage[PropDamage>0]), 
+                           sumPropDamage=sum(PropDamage), 
+                           noOfPropEvents=sum(PropDamage>0)
+                           )
+
+damageByEventType$medianCropDamage[is.na(damageByEventType$medianCropDamage)] <- 0
+damageByEventType$medianPropDamage[is.na(damageByEventType$medianPropDamage)] <- 0
+
+filter <- tail(damageByEventType$EventType[order(damageByEventType$meanCropAndPropertyDamage*damageByEventType$noOfEvents)][damageByEventType$noOfEvents>=10], n=20)
+with(damageByEventType, 
+     sorting <<- EventType[EventType %in% filter]
+                          [order(damageByEventType[EventType %in% filter,]$medianCropAndPropertyDamage*
+                                   damageByEventType[EventType %in% filter,]$noOfEvents)]
+)
+damageByEventType <- damageByEventType[damageByEventType$EventType %in% filter,]
+damageByEventType <- damageByEventType[match(sorting, damageByEventType$EventType),]
+barplot(damageByEventType$medianCropAndPropertyDamage*damageByEventType$noOfEvents, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("green1", "green3"), beside=TRUE, xaxt="n", xlab=NA, ylab=NA,
+        main="Estimated Property and Crop Damage\nMedian x No of Events (US$ Billion)", 
+        cex.names=0.8, cex.axis=2.0, las=1)
+axis(1, axTicks(1), parse(text=sprintf("%0.1f", axTicks(1)/1e9)))
+
+barplot(damageByEventType$meanCropAndPropertyDamage*damageByEventType$noOfEvents, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("red", "red3"), beside=TRUE, xaxt="n", xlab=NA, ylab=NA,
+        main="Estimated Property and Crop Damage\nTotal - Mean x No of Events (US$ Billion)", 
+        cex.names=0.8, las=1)
+axis(1, axTicks(1), parse(text=sprintf("%0.1f", axTicks(1)/1e9)))
+
+barplot(damageByEventType$medianCropDamage*damageByEventType$noOfCropEvents, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("purple", "purple3"), beside=TRUE, xaxt="n", xlab=NA, ylab=NA,
+        main="Estimated Crop Damage\nMedian x No of Events (US$ Billion)", 
+        cex.names=0.8, las=1)
+axis(1, axTicks(1), parse(text=sprintf("%0.1f", axTicks(1)/1e9)))
+
+barplot(damageByEventType$medianPropDamage*damageByEventType$noOfPropEvents, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("brown", "brown3"), beside=TRUE, xaxt="n", xlab=NA, ylab=NA,
+        main="Estimated Property Damage\nMedian x No of Events (US$ Billion)", 
+        cex.names=0.8, las=1, xlim=c(0,1e9))
+axis(1, axTicks(1), parse(text=sprintf("%0.1f", axTicks(1)/1e9)))
+
+barplot(damageByEventType$noOfEvents, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("blue", "blue4"), beside=TRUE, xlab=NA, ylab=NA,
+        main="No of Events", 
+        cex.names=0.8, las=1)
+
+barplot(damageByEventType$noOfEventsOverHundredMillion, 
+        horiz=TRUE, names.arg=damageByEventType$EventType,
+        col=c("orange", "orange3"), beside=TRUE, xlab=NA, ylab=NA,
+        main="No of Events causing over $100 million in Damages", 
+        cex.names=0.8, las=1)
+```
